@@ -1,0 +1,20 @@
+services:
+  hrms-py-prod:
+    image: hrms-py:prod
+    container_name: hrms-py-prod
+    build:
+      context: ../
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"
+    env_file:
+      - ./volume/env/.env
+    volumes:
+      - ./volume/env/.env:/app/.env
+    restart: always
+    networks:
+      - shared_network
+
+networks:
+  shared_network:
+    external: true
