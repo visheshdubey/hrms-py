@@ -45,9 +45,25 @@ commands:
               --exclude='.git' \
               --exclude='node_modules' \
               --exclude='dist' \
-              --exclude='venv' \
+              --exclude='.venv' \
               --exclude='__pycache__' \
               ./ root@147.93.18.45:/home/source/<< parameters.environment >>/${CIRCLE_PROJECT_REPONAME}/
+
+  build-docker:
+    description: "Build Docker image on VPS"
+    parameters:
+      environment:
+        type: string
+    steps:
+      - run:
+          name: Build Docker image
+          command: |
+            printf -v circle_project_reponame %q "${CIRCLE_PROJECT_REPONAME}"
+            ssh -o StrictHostKeyChecking=no root@147.93.18.45 "bash -s $circle_project_reponame" \<< 'EOF'
+              circle_project_reponame_var=$1
+              cd /home/source/<< parameters.environment >>/$circle_project_reponame_var/
+              docker build -t $circle_project_reponame_var:<< parameters.environment >> -f Dockerfile .
+            EOF
 
   setup-environment:
     description: "Setup environment variables on VPS"
@@ -79,11 +95,36 @@ commands:
           name: Deploy Docker container
           command: |
             ssh -o StrictHostKeyChecking=no root@147.93.18.45 \<< 'EOF'
-              cd /home/source/<< parameters.environment >>/${CIRCLE_PROJECT_REPONAME}
+              cd /home/source/prod/${CIRCLE_PROJECT_REPONAME}
               docker build -t hrms-py-app .
               docker stop hrms-py-container || true
               docker rm hrms-py-container || true
               docker run -d -p 8000:8000 --name hrms-py-container hrms-py-app
+            EOF
+
+  update-nginx:
+    description: "Update host Nginx site config"
+    parameters:
+      environment:
+        type: string
+    steps:
+      - run:
+          name: Update Nginx site config
+          command: |
+            printf -v circle_project_reponame %q "${CIRCLE_PROJECT_REPONAME}"
+            printf -v app_domain %q "hrms-py.devcognito.tech" 
+            ssh -o StrictHostKeyChecking=no root@147.93.18.45 "bash -s $circle_project_reponame $app_domain" \<< 'EOF'
+              circle_project_reponame_var=$1
+              domain=$2
+              cd /home/source/<< parameters.environment >>/$circle_project_reponame_var/
+              if [ -f deploy/nginx/site.conf ]; then
+                sed "s/__DOMAIN__/${domain}/g" deploy/nginx/site.conf > /etc/nginx/sites-available/${circle_project_reponame_var}.conf
+                ln -sf /etc/nginx/sites-available/${circle_project_reponame_var}.conf /etc/nginx/sites-enabled/${circle_project_reponame_var}.conf
+                nginx -t
+                systemctl reload nginx
+              else
+                echo "Nginx config not found, skipping."
+              fi
             EOF
 
 jobs:
@@ -103,6 +144,14 @@ jobs:
       - upload-code:
           environment: prod
 
+  build-prod:
+    executor: deploy-executor
+    steps:
+      - checkout
+      - add_ssh_keys
+      - build-docker:
+          environment: prod
+
   setup-environment-prod:
     executor: deploy-executor
     steps:
@@ -119,6 +168,14 @@ jobs:
       - deploy-docker:
           environment: prod
 
+  update-nginx-prod:
+    executor: deploy-executor
+    steps:
+      - checkout
+      - add_ssh_keys
+      - update-nginx:
+          environment: prod
+
 workflows:
   deploy-to-prod:
     jobs:
@@ -132,15 +189,27 @@ workflows:
           filters:
             branches:
               only: main
-      - setup-environment-prod:
+      - build-prod:
           requires:
             - upload-to-prod
+          filters:
+            branches:
+              only: main
+      - setup-environment-prod:
+          requires:
+            - build-prod
           filters:
             branches:
               only: main
       - deploy-prod:
           requires:
             - setup-environment-prod
+          filters:
+            branches:
+              only: main
+      - update-nginx-prod:
+          requires:
+            - deploy-prod
           filters:
             branches:
               only: main
