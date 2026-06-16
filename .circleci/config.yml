@@ -94,11 +94,12 @@ commands:
             - run:
                   name: Deploy Docker container
                   command: |
-                      printf -v circle_project_reponame %q "${CIRCLE_PROJECT_REPONAME}"
-                      ssh -o StrictHostKeyChecking=no root@147.93.18.45 "bash -s $circle_project_reponame" \<< 'EOF'
-                        circle_project_reponame_var=$1
-                        cd /home/source/<< parameters.environment >>/$circle_project_reponame_var/
-                        docker compose -f ./docker/docker-compose.<< parameters.environment >>.yml up -d --build
+                      ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_IP \<< 'EOF'
+                        cd /home/source/prod/${CIRCLE_PROJECT_REPONAME}
+                        docker build -t hrms-py-app .
+                        docker stop hrms-py-container || true
+                        docker rm hrms-py-container || true
+                        docker run -d -p 8000:8000 --name hrms-py-container hrms-py-app
                       EOF
 
     update-nginx:
