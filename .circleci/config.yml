@@ -45,6 +45,7 @@ commands:
               --exclude='.git' \
               --exclude='node_modules' \
               --exclude='dist' \
+              --exclude='venv' \
               --exclude='.venv' \
               --exclude='__pycache__' \
               ./ root@147.93.18.45:/home/source/<< parameters.environment >>/${CIRCLE_PROJECT_REPONAME}/
@@ -94,12 +95,13 @@ commands:
       - run:
           name: Deploy Docker container
           command: |
-            ssh -o StrictHostKeyChecking=no root@147.93.18.45 \<< 'EOF'
-              cd /home/source/prod/${CIRCLE_PROJECT_REPONAME}
-              docker build -t hrms-py-app .
-              docker stop hrms-py-container || true
-              docker rm hrms-py-container || true
-              docker run -d -p 8000:8000 --name hrms-py-container hrms-py-app
+            printf -v circle_project_reponame %q "${CIRCLE_PROJECT_REPONAME}"
+            ssh -o StrictHostKeyChecking=no root@147.93.18.45 "bash -s $circle_project_reponame" \<< 'EOF'
+              circle_project_reponame_var=$1
+              cd /home/source/<< parameters.environment >>/$circle_project_reponame_var/
+              docker stop ${circle_project_reponame_var}-container || true
+              docker rm ${circle_project_reponame_var}-container || true
+              docker run -d -p 8000:8000 --name ${circle_project_reponame_var}-container ${circle_project_reponame_var}:<< parameters.environment >>
             EOF
 
   update-nginx:
@@ -112,7 +114,7 @@ commands:
           name: Update Nginx site config
           command: |
             printf -v circle_project_reponame %q "${CIRCLE_PROJECT_REPONAME}"
-            printf -v app_domain %q "hrms-py.devcognito.tech" 
+            printf -v app_domain %q "hrms-py.devcognito.tech"
             ssh -o StrictHostKeyChecking=no root@147.93.18.45 "bash -s $circle_project_reponame $app_domain" \<< 'EOF'
               circle_project_reponame_var=$1
               domain=$2
@@ -123,7 +125,7 @@ commands:
                 nginx -t
                 systemctl reload nginx
               else
-                echo "Nginx config not found, skipping."
+                echo "Warning: deploy/nginx/site.conf not found. Skipping Nginx file overwrite to keep existing routes safe."
               fi
             EOF
 
