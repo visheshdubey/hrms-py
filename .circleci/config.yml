@@ -1,0 +1,27 @@
+version: 2.1
+
+jobs:
+  deploy:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - run:
+          name: "Deploy Python API via SSH"
+          command: |
+            ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_IP << 'EOF'
+              cd /opt/hrms-py || { git clone https://github.com/visheshdubey/hrms-py.git /opt/hrms-py && cd /opt/hrms-py; }
+              git pull origin main
+              docker build -t hrms-py .
+              docker stop hrms-py || true
+              docker rm hrms-py || true
+              docker run -d -p 8000:8000 --name hrms-py hrms-py
+            EOF
+
+workflows:
+  build-and-deploy:
+    jobs:
+      - deploy:
+          filters:
+            branches:
+              only: main
