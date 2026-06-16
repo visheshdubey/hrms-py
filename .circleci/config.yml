@@ -1,211 +1,146 @@
 version: 2.1
 
 executors:
-    deploy-executor:
-        docker:
-            - image: cimg/base:stable
+  deploy-executor:
+    docker:
+      - image: cimg/base:stable
 
 commands:
-    install-rsync:
-        description: "Install rsync if not already installed"
-        steps:
-            - run:
-                  name: Install rsync
-                  command: |
-                      if ! command -v rsync &> /dev/null; then
-                        sudo apt-get update
-                        sudo apt-get install -y rsync
-                      fi
+  install-rsync:
+    description: "Install rsync if not already installed"
+    steps:
+      - run:
+          name: Install rsync
+          command: |
+            if ! command -v rsync &> /dev/null; then
+              sudo apt-get update
+              sudo apt-get install -y rsync
+            fi
 
-    create-remote-dir:
-        description: "Create remote directory on server"
-        parameters:
-            environment:
-                type: string
-        steps:
-            - run:
-                  name: Create remote directory
-                  command: |
-                      ssh -o StrictHostKeyChecking=no root@147.93.18.45 "mkdir -p /home/source/<< parameters.environment >>/${CIRCLE_PROJECT_REPONAME}/"
+  create-remote-dir:
+    description: "Create remote directory on server"
+    parameters:
+      environment:
+        type: string
+    steps:
+      - run:
+          name: Create remote directory
+          command: |
+            ssh -o StrictHostKeyChecking=no root@147.93.18.45 "mkdir -p /home/source/<< parameters.environment >>/${CIRCLE_PROJECT_REPONAME}/"
 
-    upload-code:
-        description: "Upload code to server using rsync"
-        parameters:
-            environment:
-                type: string
-        steps:
-            - run:
-                  name: Install rsync on remote server
-                  command: |
-                      ssh -o StrictHostKeyChecking=no root@147.93.18.45 "if ! command -v rsync &> /dev/null; then apt-get update && apt-get install -y rsync; fi"
-            - run:
-                  name: Upload code to server
-                  command: |
-                      rsync -avz -e "ssh -o StrictHostKeyChecking=no" \
-                        --exclude='.git' \
-                        --exclude='node_modules' \
-                        --exclude='dist' \
-                        --exclude='.venv' \
-                        --exclude='__pycache__' \
-                        ./ root@147.93.18.45:/home/source/<< parameters.environment >>/${CIRCLE_PROJECT_REPONAME}/
+  upload-code:
+    description: "Upload code to server using rsync"
+    parameters:
+      environment:
+        type: string
+    steps:
+      - run:
+          name: Install rsync on remote server
+          command: |
+            ssh -o StrictHostKeyChecking=no root@147.93.18.45 "if ! command -v rsync &> /dev/null; then apt-get update && apt-get install -y rsync; fi"
+      - run:
+          name: Upload code to server
+          command: |
+            rsync -avz -e "ssh -o StrictHostKeyChecking=no" \
+              --exclude='.git' \
+              --exclude='node_modules' \
+              --exclude='dist' \
+              --exclude='venv' \
+              --exclude='__pycache__' \
+              ./ root@147.93.18.45:/home/source/<< parameters.environment >>/${CIRCLE_PROJECT_REPONAME}/
 
-    build-docker:
-        description: "Build Docker image on VPS"
-        parameters:
-            environment:
-                type: string
-        steps:
-            - run:
-                  name: Build Docker image
-                  command: |
-                      printf -v circle_project_reponame %q "${CIRCLE_PROJECT_REPONAME}"
-                      ssh -o StrictHostKeyChecking=no root@147.93.18.45 "bash -s $circle_project_reponame" \<< 'EOF'
-                        circle_project_reponame_var=$1
-                        cd /home/source/<< parameters.environment >>/$circle_project_reponame_var/
-                        docker build -t $circle_project_reponame_var:<< parameters.environment >> -f Dockerfile .
-                      EOF
+  setup-environment:
+    description: "Setup environment variables on VPS"
+    parameters:
+      environment:
+        type: string
+    steps:
+      - run:
+          name: Setup ENV
+          command: |
+            printf -v circle_project_reponame %q "${CIRCLE_PROJECT_REPONAME}"
+            ssh -o StrictHostKeyChecking=no root@147.93.18.45 "bash -s $circle_project_reponame" \<< 'EOF'
+              circle_project_reponame_var=$1
+              mkdir -p /home/source/<< parameters.environment >>/$circle_project_reponame_var/docker/volume/env/
+              if [ -f /home/env/<< parameters.environment >>/$circle_project_reponame_var/<< parameters.environment >>.env ]; then
+                cp /home/env/<< parameters.environment >>/$circle_project_reponame_var/<< parameters.environment >>.env /home/source/<< parameters.environment >>/$circle_project_reponame_var/docker/volume/env/.env
+              else
+                touch /home/source/<< parameters.environment >>/$circle_project_reponame_var/docker/volume/env/.env
+              fi
+            EOF
 
-    setup-environment:
-        description: "Setup environment variables on VPS"
-        parameters:
-            environment:
-                type: string
-        steps:
-            - run:
-                  name: Setup ENV
-                  command: |
-                      printf -v circle_project_reponame %q "${CIRCLE_PROJECT_REPONAME}"
-                      ssh -o StrictHostKeyChecking=no root@147.93.18.45 "bash -s $circle_project_reponame" \<< 'EOF'
-                        circle_project_reponame_var=$1
-                        mkdir -p /home/source/<< parameters.environment >>/$circle_project_reponame_var/docker/volume/env/
-                        if [ -f /home/env/<< parameters.environment >>/$circle_project_reponame_var/<< parameters.environment >>.env ]; then
-                          cp /home/env/<< parameters.environment >>/$circle_project_reponame_var/<< parameters.environment >>.env /home/source/<< parameters.environment >>/$circle_project_reponame_var/docker/volume/env/.env
-                        else
-                          touch /home/source/<< parameters.environment >>/$circle_project_reponame_var/docker/volume/env/.env
-                        fi
-                      EOF
-
-    deploy-docker:
-        description: "Deploy Docker container"
-        parameters:
-            environment:
-                type: string
-        steps:
-            - run:
-                  name: Deploy Docker container
-                  command: |
-                      ssh -o StrictHostKeyChecking=no $SSH_USER@$SERVER_IP \<< 'EOF'
-                        cd /home/source/prod/${CIRCLE_PROJECT_REPONAME}
-                        docker build -t hrms-py-app .
-                        docker stop hrms-py-container || true
-                        docker rm hrms-py-container || true
-                        docker run -d -p 8000:8000 --name hrms-py-container hrms-py-app
-                      EOF
-
-    update-nginx:
-        description: "Update host Nginx site config"
-        parameters:
-            environment:
-                type: string
-        steps:
-            - run:
-                  name: Update Nginx site config
-                  command: |
-                      printf -v circle_project_reponame %q "${CIRCLE_PROJECT_REPONAME}"
-                      printf -v app_domain %q "hrms-be.devcognito.tech"
-                      ssh -o StrictHostKeyChecking=no root@147.93.18.45 "bash -s $circle_project_reponame $app_domain" \<< 'EOF'
-                        circle_project_reponame_var=$1
-                        domain=$2
-                        cd /home/source/<< parameters.environment >>/$circle_project_reponame_var/
-                        sed "s/__DOMAIN__/${domain}/g" deploy/nginx/site.conf > /etc/nginx/sites-available/${circle_project_reponame_var}.conf
-                        ln -sf /etc/nginx/sites-available/${circle_project_reponame_var}.conf /etc/nginx/sites-enabled/${circle_project_reponame_var}.conf
-                        nginx -t
-                        systemctl reload nginx
-                      EOF
+  deploy-docker:
+    description: "Deploy Docker container"
+    parameters:
+      environment:
+        type: string
+    steps:
+      - run:
+          name: Deploy Docker container
+          command: |
+            ssh -o StrictHostKeyChecking=no root@147.93.18.45 \<< 'EOF'
+              cd /home/source/<< parameters.environment >>/${CIRCLE_PROJECT_REPONAME}
+              docker build -t hrms-py-app .
+              docker stop hrms-py-container || true
+              docker rm hrms-py-container || true
+              docker run -d -p 8000:8000 --name hrms-py-container hrms-py-app
+            EOF
 
 jobs:
-    checkout-code:
-        executor: deploy-executor
-        steps:
-            - checkout
+  checkout-code:
+    executor: deploy-executor
+    steps:
+      - checkout
 
-    upload-to-prod:
-        executor: deploy-executor
-        steps:
-            - checkout
-            - add_ssh_keys
-            - install-rsync
-            - create-remote-dir:
-                  environment: prod
-            - upload-code:
-                  environment: prod
+  upload-to-prod:
+    executor: deploy-executor
+    steps:
+      - checkout
+      - add_ssh_keys
+      - install-rsync
+      - create-remote-dir:
+          environment: prod
+      - upload-code:
+          environment: prod
 
-    build-prod:
-        executor: deploy-executor
-        steps:
-            - checkout
-            - add_ssh_keys
-            - build-docker:
-                  environment: prod
+  setup-environment-prod:
+    executor: deploy-executor
+    steps:
+      - checkout
+      - add_ssh_keys
+      - setup-environment:
+          environment: prod
 
-    setup-environment-prod:
-        executor: deploy-executor
-        steps:
-            - checkout
-            - add_ssh_keys
-            - setup-environment:
-                  environment: prod
-
-    deploy-prod:
-        executor: deploy-executor
-        steps:
-            - checkout
-            - add_ssh_keys
-            - deploy-docker:
-                  environment: prod
-
-    update-nginx-prod:
-        executor: deploy-executor
-        steps:
-            - checkout
-            - add_ssh_keys
-            - update-nginx:
-                  environment: prod
+  deploy-prod:
+    executor: deploy-executor
+    steps:
+      - checkout
+      - add_ssh_keys
+      - deploy-docker:
+          environment: prod
 
 workflows:
-    deploy-to-prod:
-        jobs:
-            - checkout-code:
-                  filters:
-                      branches:
-                          only: main
-            - upload-to-prod:
-                  requires:
-                      - checkout-code
-                  filters:
-                      branches:
-                          only: main
-            - build-prod:
-                  requires:
-                      - upload-to-prod
-                  filters:
-                      branches:
-                          only: main
-            - setup-environment-prod:
-                  requires:
-                      - build-prod
-                  filters:
-                      branches:
-                          only: main
-            - deploy-prod:
-                  requires:
-                      - setup-environment-prod
-                  filters:
-                      branches:
-                          only: main
-            - update-nginx-prod:
-                  requires:
-                      - deploy-prod
-                  filters:
-                      branches:
-                          only: main
+  deploy-to-prod:
+    jobs:
+      - checkout-code:
+          filters:
+            branches:
+              only: main
+      - upload-to-prod:
+          requires:
+            - checkout-code
+          filters:
+            branches:
+              only: main
+      - setup-environment-prod:
+          requires:
+            - upload-to-prod
+          filters:
+            branches:
+              only: main
+      - deploy-prod:
+          requires:
+            - setup-environment-prod
+          filters:
+            branches:
+              only: main
