@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
+# Using opencv-python-headless to avoid GUI dependencies
 RUN pip install --no-cache-dir \
     fastapi \
     uvicorn \
@@ -29,7 +30,7 @@ COPY . .
 RUN mkdir -p resumes_to_process archive/profile_pics
 
 # Expose the API port
-EXPOSE 8000
+EXPOSE 3001
 
 # Start the FastAPI server
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "3001"]
