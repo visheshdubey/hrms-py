@@ -30,7 +30,7 @@ COPY . .
 RUN mkdir -p resumes_to_process archive/profile_pics
 
 # Expose the API port
-EXPOSE 3001
+EXPOSE 8000
 
 # Start the FastAPI server
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "3001"]
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]

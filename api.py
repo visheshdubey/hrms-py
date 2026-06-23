@@ -143,6 +143,6 @@ def system_status():
 
 if __name__ == "__main__":
     import uvicorn
-    # Make sure we use port 3001 to match the Vite Proxy config
-    print(f"\n [Server] ATS API server starting at http://localhost:3001")
-    uvicorn.run("api:app", host="0.0.0.0", port=3001, reload=True)
+    # Make sure we use port 8000 to match the Docker config
+    print(f"\n [Server] ATS API server starting at http://localhost:8000")
+    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
