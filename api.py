@@ -79,6 +79,7 @@ async def upload_files(
             "message": f"{len(uploaded_files)} resume(s) processed by AI pipeline.",
             "files": uploaded_files,
             "candidates": candidates_out,
+            "job_id": job_id,
         }
     except Exception as e:
         print(f" [Error] Python pipeline error: {str(e)}")
