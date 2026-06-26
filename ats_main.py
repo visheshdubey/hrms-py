@@ -1249,19 +1249,26 @@ def calculate_multi_factor_score(candidate_data: dict, expected_skills: list,
 def run_ats_pipeline(expected_skills=None, job_id=None, job_description=None):
     if expected_skills is None:
         expected_skills = []
-    TARGET_FOLDER = "resumes_to_process"
-    PROCESSED_FOLDER = "archive/processed"
-    FAILED_FOLDER = "archive/failed"
-    PICS_FOLDER = "archive/profile_pics"
-    JSON_OUTPUT_FILE = "candidates_data.json"
 
-    for folder in [TARGET_FOLDER, PROCESSED_FOLDER, FAILED_FOLDER, PICS_FOLDER]:
-        os.makedirs(folder, exist_ok=True)
+    from config import (
+        CANDIDATES_JSON,
+        FAILED_DIR,
+        PROCESSED_DIR,
+        PROFILE_PICS_DIR,
+        RESUME_EXTENSIONS,
+        UPLOAD_DIR,
+    )
 
-    files = [f for f in os.listdir(TARGET_FOLDER)
-             if f.lower().endswith(('.pdf', '.png', '.jpg', '.jpeg', '.docx'))]
+    for folder in [UPLOAD_DIR, PROCESSED_DIR, FAILED_DIR, PROFILE_PICS_DIR]:
+        folder.mkdir(parents=True, exist_ok=True)
+
+    files = [
+        file_name
+        for file_name in os.listdir(UPLOAD_DIR)
+        if file_name.lower().endswith(RESUME_EXTENSIONS)
+    ]
     if not files:
-        print(f"\n[!] Folder '{TARGET_FOLDER}' is empty.")
+        print(f"\n[!] Folder '{UPLOAD_DIR}' is empty.")
         return
 
     optimal_threads = calculate_optimal_threads(len(files))
@@ -1278,12 +1285,20 @@ def run_ats_pipeline(expected_skills=None, job_id=None, job_description=None):
     extracted_candidates_data = []
 
     with ThreadPoolExecutor(max_workers=optimal_threads) as executor:
-        futures = {executor.submit(process_single_resume, os.path.join(TARGET_FOLDER, f), f, expected_skills): f for f in files}
+        futures = {
+            executor.submit(
+                process_single_resume,
+                str(UPLOAD_DIR / file_name),
+                file_name,
+                expected_skills,
+            ): file_name
+            for file_name in files
+        }
 
         for future in as_completed(futures):
             result = future.result()
             filename = result['filename']
-            file_path = os.path.join(TARGET_FOLDER, filename)
+            file_path = UPLOAD_DIR / filename
 
             if result['status'] == 'success':
                 d = result['data']
@@ -1297,14 +1312,14 @@ def run_ats_pipeline(expected_skills=None, job_id=None, job_description=None):
                 with db_lock:
                     extracted_candidates_data.append(d)
 
-                shutil.move(file_path, os.path.join(PROCESSED_FOLDER, filename))
+                shutil.move(str(file_path), str(PROCESSED_DIR / filename))
                 print(f"Processed: {filename}")
             else:
                 logging.error(f"Extraction failed for {filename}: {result['error']}")
-                shutil.move(file_path, os.path.join(FAILED_FOLDER, filename))
+                shutil.move(str(file_path), str(FAILED_DIR / filename))
                 print(f"Error: {filename}")
 
-    with open(JSON_OUTPUT_FILE, 'w', encoding='utf-8') as json_file:
+    with open(CANDIDATES_JSON, 'w', encoding='utf-8') as json_file:
         json.dump(extracted_candidates_data, json_file, indent=4)
 
     print(f"Pipeline finished. {len(extracted_candidates_data)} candidates processed.")

@@ -1,13 +1,16 @@
-from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-import os
+from fastapi.responses import JSONResponse
 import json
-from typing import List
+import os
 import shutil
+import uuid
+from typing import List
 
 import ats_main
 import export_results
+from config import CANDIDATES_JSON, UPLOAD_DIR
+from serialization import normalize_candidates
 
 app = FastAPI(title="ATS Backend System", description="FastAPI Server for Resume Analysis")
 
@@ -18,11 +21,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-JSON_PATH = os.path.join(BASE_DIR, "candidates_data.json")
-UPLOAD_DIR = os.path.join(BASE_DIR, "resumes_to_process")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+def _load_candidates() -> list[dict]:
+    if not CANDIDATES_JSON.exists():
+        return []
+
+    with open(CANDIDATES_JSON, "r", encoding="utf-8") as file:
+        candidates = json.load(file)
+
+    return normalize_candidates(candidates)
 
 
 @app.post("/api/upload")
@@ -30,50 +39,36 @@ async def upload_files(
     files: List[UploadFile] = File(...),
     job_id: str = Form(None),
     job_description: str = Form(None),
-    expected_skills: str = Form(None)
+    expected_skills: str = Form(None),
 ):
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
-    skills_list = []
+    skills_list: list[str] = []
     if expected_skills:
         try:
-            skills_list = json.loads(expected_skills)
-        except Exception:
+            parsed = json.loads(expected_skills)
+            skills_list = parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
             skills_list = []
 
-    uploaded_files = []
+    uploaded_files: list[str] = []
     try:
-        # Save uploaded files
         for file in files:
-            file_path = os.path.join(UPLOAD_DIR, file.filename)
+            safe_name = os.path.basename(file.filename or "resume.pdf")
+            file_path = UPLOAD_DIR / f"{uuid.uuid4().hex}_{safe_name}"
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
-            uploaded_files.append(file.filename)
-        # Process resumes
-        ats_main.run_ats_pipeline(expected_skills=skills_list, job_id=job_id, job_description=job_description)
-        export_results.generate_vishesh_report()
+            uploaded_files.append(safe_name)
 
-        # Fetch results
-        candidates_out = []
-        if os.path.exists(JSON_PATH):
-            with open(JSON_PATH, 'r', encoding='utf-8') as f:
-                candidates_out = json.load(f)
-            
-            for c in candidates_out:
-                skills = c.get("skills", [])
-                if isinstance(skills, str):
-                    try:
-                        c["skills"] = json.loads(skills) if skills else []
-                    except:
-                        c["skills"] = []
-                
-                exp = c.get("experience", "Fresher")
-                if isinstance(exp, list) and len(exp) > 0:
-                    c["experience"] = exp[0]
-                elif not exp:
-                    c["experience"] = "Fresher"
+        ats_main.run_ats_pipeline(
+            expected_skills=skills_list,
+            job_id=job_id,
+            job_description=job_description,
+        )
+        export_results.export_candidates_report()
 
+        candidates_out = _load_candidates()
         return {
             "success": True,
             "message": f"{len(uploaded_files)} resume(s) processed by AI pipeline.",
@@ -81,69 +76,56 @@ async def upload_files(
             "candidates": candidates_out,
             "job_id": job_id,
         }
-    except Exception as e:
-        print(f" [Error] Python pipeline error: {str(e)}")
-        return JSONResponse(status_code=500, content={
-            "success": False,
-            "error": f"Python pipeline failed: {str(e)}",
-            "files": uploaded_files
-        })
+    except Exception as error:
+        print(f" [Error] Python pipeline error: {error}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": f"Python pipeline failed: {error}",
+                "files": uploaded_files,
+            },
+        )
+
 
 @app.get("/api/candidates")
 def get_candidates():
-    if not os.path.exists(JSON_PATH):
+    if not CANDIDATES_JSON.exists():
         return {"candidates": []}
 
     try:
-        with open(JSON_PATH, 'r', encoding='utf-8') as f:
-            candidates = json.load(f)
-
-        # Sort by match_score DESC
-        candidates.sort(key=lambda x: x.get("match_score", 0), reverse=True)
-
-        # Parse skills and experience formatting
-        for c in candidates:
-            skills = c.get("skills", [])
-            if isinstance(skills, str):
-                try:
-                    c["skills"] = json.loads(skills) if skills else []
-                except:
-                    c["skills"] = []
-
-            exp = c.get("experience", "Fresher")
-            if isinstance(exp, list) and len(exp) > 0:
-                c["experience"] = exp[0]
-            elif not exp:
-                c["experience"] = "Fresher"
-
+        candidates = _load_candidates()
+        candidates.sort(key=lambda candidate: candidate.get("match_score", 0), reverse=True)
         return {"candidates": candidates}
-
-    except Exception as e:
-        print(f"JSON data error: {str(e)}")
-        return JSONResponse(status_code=500, content={"error": "Failed to read candidates", "detail": str(e)})
+    except Exception as error:
+        print(f"JSON data error: {error}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to read candidates", "detail": str(error)},
+        )
 
 
 @app.get("/api/system-status")
 def system_status():
-    if not os.path.exists(JSON_PATH):
+    if not CANDIDATES_JSON.exists():
         return {"online": False, "message": "JSON file not found", "candidateCount": 0}
 
     try:
-        with open(JSON_PATH, 'r', encoding='utf-8') as f:
-            candidates = json.load(f)
+        with open(CANDIDATES_JSON, "r", encoding="utf-8") as file:
+            candidates = json.load(file)
 
         count = len(candidates)
         return {
             "online": True,
             "message": f"System Online: {count} Candidates Indexed",
-            "candidateCount": count
+            "candidateCount": count,
         }
-    except Exception as e:
-        return {"online": False, "message": f"Error: {str(e)}", "candidateCount": 0}
+    except Exception as error:
+        return {"online": False, "message": f"Error: {error}", "candidateCount": 0}
 
 
 if __name__ == "__main__":
     import uvicorn
-    # Make sure we use port 8000 to match the Docker config
-    print(f"\n [Server] ATS API server starting at http://localhost:8000")
+
+    print("\n [Server] ATS API server starting at http://localhost:8000")
     uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)

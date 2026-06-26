@@ -2,3 +2,9 @@ venv/
 env/
 __pycache__/
 .env
+*.log
+candidates_data.json
+vishesh_report.csv
+archive/
+resumes_to_process/*
+!resumes_to_process/.gitkeep
