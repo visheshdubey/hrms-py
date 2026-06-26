@@ -1,72 +1,85 @@
-import json
 import csv
-import os
+import json
 
-def generate_vishesh_report():
-    json_path = 'candidates_data.json'
-    
-    if not os.path.exists(json_path):
-        print("No candidates found (JSON missing). Run main.py first!")
-        return
+from config import CANDIDATES_JSON, REPORT_CSV
+
+
+def export_candidates_report() -> str | None:
+    if not CANDIDATES_JSON.exists():
+        print("No candidates found (JSON missing). Run the ATS pipeline first.")
+        return None
 
     try:
-        with open(json_path, 'r', encoding='utf-8') as f:
-            candidates = json.load(f)
-            
+        with open(CANDIDATES_JSON, "r", encoding="utf-8") as file:
+            candidates = json.load(file)
+
         if not candidates:
-            print("No candidates found in the JSON file. Run main.py first!")
-            return
+            print("No candidates found in the JSON file. Run the ATS pipeline first.")
+            return None
 
-        # 2. Print a clean summary to the Terminal for immediate proof
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print(" [Start] ATS EXTRACTION RESULTS — 18-LAYER PIPELINE ")
-        print("="*60)
-        
+        print("=" * 60)
+
         rows = []
-        for c in candidates:
-            filename = c.get('filename', 'Unknown')
-            name = c.get('name', 'Unknown')
-            email = c.get('email', 'Not Found')
-            phone = c.get('phone', 'Not Found')
-            location = c.get('location', 'Not Found')
-            
-            exp_list = c.get('experience', [])
-            experience = exp_list[0] if isinstance(exp_list, list) and exp_list else 'Fresher'
-            
-            education = c.get('education', 'Not Found')
-            
-            skills_list = c.get('skills', [])
+        for candidate in candidates:
+            filename = candidate.get("filename", "Unknown")
+            name = candidate.get("name", "Unknown")
+            email = candidate.get("email", "Not Found")
+            phone = candidate.get("phone", "Not Found")
+            location = candidate.get("location", "Not Found")
+
+            experience_list = candidate.get("experience", [])
+            experience = (
+                experience_list[0]
+                if isinstance(experience_list, list) and experience_list
+                else "Fresher"
+            )
+
+            education = candidate.get("education", "Not Found")
+            skills_list = candidate.get("skills", [])
             skills = ", ".join(skills_list) if isinstance(skills_list, list) else str(skills_list)
-            
-            match_score = c.get('match_score', 0)
-            status = c.get('status', 'Processed')
+            match_score = candidate.get("match_score", 0)
+            status = candidate.get("status", "Processed")
+            linkedin = candidate.get("linkedin", "")
+            github = candidate.get("github", "")
+            portfolio = candidate.get("portfolio", "")
 
-            # New fields
-            linkedin = c.get('linkedin', '')
-            github = c.get('github', '')
-            portfolio = c.get('portfolio', '')
+            certifications_list = candidate.get("certifications", [])
+            certifications = (
+                ", ".join(certifications_list)
+                if isinstance(certifications_list, list)
+                else str(certifications_list)
+            )
 
-            certs_list = c.get('certifications', [])
-            certifications = ", ".join(certs_list) if isinstance(certs_list, list) else str(certs_list)
+            languages_list = candidate.get("languages", [])
+            languages = (
+                ", ".join(languages_list)
+                if isinstance(languages_list, list)
+                else str(languages_list)
+            )
 
-            langs_list = c.get('languages', [])
-            languages = ", ".join(langs_list) if isinstance(langs_list, list) else str(langs_list)
+            summary = candidate.get("summary", "")[:200]
+            university = candidate.get("university", "")
+            grad_year = candidate.get("grad_year", "")
 
-            summary = c.get('summary', '')[:200]  # Truncate for CSV readability
-            university = c.get('university', '')
-            grad_year = c.get('grad_year', '')
-
-            work_history_list = c.get('work_history', [])
-            work_history = "; ".join(
-                [f"{w.get('title', '')} @ {w.get('company', '')} ({w.get('duration', '')})" 
-                 for w in work_history_list]
-            ) if isinstance(work_history_list, list) else ""
+            work_history_list = candidate.get("work_history", [])
+            work_history = (
+                "; ".join(
+                    [
+                        f"{work.get('title', '')} @ {work.get('company', '')} ({work.get('duration', '')})"
+                        for work in work_history_list
+                    ]
+                )
+                if isinstance(work_history_list, list)
+                else ""
+            )
 
             rows.append([
                 name, email, phone, location, experience, education, skills,
                 match_score, status, linkedin, github, portfolio,
                 certifications, languages, summary, university, grad_year,
-                work_history, filename
+                work_history, filename,
             ])
 
             print(f"File:          {filename}")
@@ -86,26 +99,29 @@ def generate_vishesh_report():
             print(f"Score:         {match_score}% Match")
             print("-" * 60)
 
-        # 3. Export to an Excel-friendly CSV file
-        csv_filename = 'vishesh_report.csv'
-        with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            # Write the column headers
+        with open(REPORT_CSV, "w", newline="", encoding="utf-8") as file:
+            writer = csv.writer(file)
             writer.writerow([
-                'Name', 'Email', 'Phone', 'Location', 'Experience', 'Education',
-                'Skills', 'Match Score', 'Status', 'LinkedIn', 'GitHub', 'Portfolio',
-                'Certifications', 'Languages', 'Summary', 'University', 'Graduation Year',
-                'Work History', 'Filename'
+                "Name", "Email", "Phone", "Location", "Experience", "Education",
+                "Skills", "Match Score", "Status", "LinkedIn", "GitHub", "Portfolio",
+                "Certifications", "Languages", "Summary", "University", "Graduation Year",
+                "Work History", "Filename",
             ])
-            # Write all the data
             writer.writerows(rows)
 
         print(f"\n [Success] Successfully exported {len(rows)} processed profiles!")
-        print(f" [Folder] A new file named '{csv_filename}' has been created in your folder.")
-        print(f" [Columns] 19 columns including all 18 extraction layers.")
+        print(f" [Folder] Report saved to '{REPORT_CSV}'.")
+        return str(REPORT_CSV)
 
-    except Exception as e:
-        print(f"Error reading JSON: {e}")
+    except Exception as error:
+        print(f"Error reading JSON: {error}")
+        return None
+
+
+def generate_vishesh_report() -> str | None:
+    """Backward-compatible alias for existing callers."""
+    return export_candidates_report()
+
 
 if __name__ == "__main__":
-    generate_vishesh_report()
+    export_candidates_report()

@@ -6,13 +6,18 @@ without requiring PyTorch / spaCy / EasyOCR.
 Start with:  python -m uvicorn api_stub:app --reload --port 3001
 """
 
+import hashlib
+import json
 import os
 import random
-import hashlib
+import uuid
 from typing import List
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+
+from config import CANDIDATES_JSON, UPLOAD_DIR
+from serialization import normalize_candidates
 
 app = FastAPI(title="ATS Backend (Dev Stub)", description="Mock ATS server — no ML deps required")
 
@@ -23,9 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR = os.path.join(BASE_DIR, "resumes_to_process")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 MOCK_SKILLS = [
     ["Python", "FastAPI", "SQL"],
@@ -52,7 +55,6 @@ MOCK_UNIVERSITIES = [
 
 
 def _mock_candidate(filename: str, job_id: str | None) -> dict:
-    """Generate a deterministic-ish mock candidate from the filename."""
     seed = int(hashlib.md5(filename.encode()).hexdigest(), 16) % 10000
     rng = random.Random(seed)
 
@@ -68,7 +70,7 @@ def _mock_candidate(filename: str, job_id: str | None) -> dict:
         "email": email,
         "phone": f"+91 {rng.randint(7000000000, 9999999999)}",
         "location": rng.choice(["Bangalore", "Mumbai", "Delhi", "Hyderabad", "Pune"]),
-        "education": f"B.Tech in Computer Science",
+        "education": "B.Tech in Computer Science",
         "experience": f"{rng.randint(1, 8)} years",
         "skills": skills,
         "match_score": score,
@@ -107,16 +109,54 @@ async def upload_files(
         raise HTTPException(status_code=400, detail="No files uploaded")
 
     results = []
-    for f in files:
-        # Save the file so the real pipeline could process it later
-        dest = os.path.join(UPLOAD_DIR, f.filename or "upload.pdf")
-        content = await f.read()
-        with open(dest, "wb") as fh:
-            fh.write(content)
+    for upload in files:
+        safe_name = os.path.basename(upload.filename or "resume.pdf")
+        dest = UPLOAD_DIR / f"{uuid.uuid4().hex}_{safe_name}"
+        content = await upload.read()
+        with open(dest, "wb") as file_handle:
+            file_handle.write(content)
 
-        results.append(_mock_candidate(f.filename or "resume.pdf", job_id))
+        results.append(_mock_candidate(safe_name, job_id))
 
-    return {"candidates": results, "stub": True}
+    with open(CANDIDATES_JSON, "w", encoding="utf-8") as file_handle:
+        json.dump(results, file_handle, indent=2)
+
+    return {
+        "success": True,
+        "message": f"{len(results)} resume(s) processed by stub pipeline.",
+        "files": [candidate["filename"] for candidate in results],
+        "candidates": normalize_candidates(results),
+        "job_id": job_id,
+        "stub": True,
+    }
+
+
+@app.get("/api/candidates")
+def get_candidates():
+    if not CANDIDATES_JSON.exists():
+        return {"candidates": []}
+
+    with open(CANDIDATES_JSON, "r", encoding="utf-8") as file_handle:
+        candidates = normalize_candidates(json.load(file_handle))
+
+    candidates.sort(key=lambda candidate: candidate.get("match_score", 0), reverse=True)
+    return {"candidates": candidates}
+
+
+@app.get("/api/system-status")
+def system_status():
+    if not CANDIDATES_JSON.exists():
+        return {"online": True, "message": "Stub mode: no candidates yet", "candidateCount": 0, "mode": "stub"}
+
+    with open(CANDIDATES_JSON, "r", encoding="utf-8") as file_handle:
+        count = len(json.load(file_handle))
+
+    return {
+        "online": True,
+        "message": f"Stub Online: {count} Candidates Indexed",
+        "candidateCount": count,
+        "mode": "stub",
+    }
 
 
 @app.get("/health")
