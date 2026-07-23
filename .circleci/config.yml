@@ -108,9 +108,10 @@ commands:
             ssh -o StrictHostKeyChecking=no root@147.93.18.45 "bash -s $circle_project_reponame" \<< 'EOF'
               circle_project_reponame_var=$1
               cd /home/source/<< parameters.environment >>/$circle_project_reponame_var/
-              docker stop ${circle_project_reponame_var}-container || true
-              docker rm ${circle_project_reponame_var}-container || true
-              docker run -d -p 8000:8000 --name ${circle_project_reponame_var}-container ${circle_project_reponame_var}:<< parameters.environment >>
+              # Force-remove any prior container (stop+rm alone can leave a name conflict)
+              docker rm -f "${circle_project_reponame_var}-container" 2>/dev/null || true
+              docker ps -aq --filter "name=^/${circle_project_reponame_var}-container$" | xargs -r docker rm -f 2>/dev/null || true
+              docker run -d -p 8000:8000 --name "${circle_project_reponame_var}-container" "${circle_project_reponame_var}:<< parameters.environment >>"
             EOF
 
   update-nginx:
