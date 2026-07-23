@@ -23,7 +23,9 @@ commands:
       - run:
           name: Clean remote disk
           command: |
-            ssh -o StrictHostKeyChecking=no root@147.93.18.45 "docker image prune -af || true; docker container prune -f || true; journalctl --vacuum-time=1d || true; rm -rf /home/source/prod/hrms-py/archive/processed/* || true"
+            # Do NOT use `docker image prune -af` — it deletes tagged images like hrms-py:prod
+            # between build-prod and deploy-prod when no container is holding them yet.
+            ssh -o StrictHostKeyChecking=no root@147.93.18.45 "docker container prune -f || true; docker builder prune -f || true; journalctl --vacuum-time=1d || true; rm -rf /home/source/prod/hrms-py/archive/processed/* || true"
 
   create-remote-dir:
     description: "Create remote directory on server"
@@ -70,9 +72,14 @@ commands:
           command: |
             printf -v circle_project_reponame %q "${CIRCLE_PROJECT_REPONAME}"
             ssh -o StrictHostKeyChecking=no root@147.93.18.45 "bash -s $circle_project_reponame" \<< 'EOF'
+              set -euo pipefail
               circle_project_reponame_var=$1
+              image_tag="${circle_project_reponame_var}:<< parameters.environment >>"
               cd /home/source/<< parameters.environment >>/$circle_project_reponame_var/
-              docker build -t $circle_project_reponame_var:<< parameters.environment >> -f Dockerfile .
+              test -f Dockerfile
+              docker build -t "$image_tag" -f Dockerfile .
+              docker image inspect "$image_tag" >/dev/null
+              echo "Built $image_tag OK"
             EOF
 
   setup-environment:
@@ -106,12 +113,24 @@ commands:
           command: |
             printf -v circle_project_reponame %q "${CIRCLE_PROJECT_REPONAME}"
             ssh -o StrictHostKeyChecking=no root@147.93.18.45 "bash -s $circle_project_reponame" \<< 'EOF'
+              set -euo pipefail
               circle_project_reponame_var=$1
+              image_tag="${circle_project_reponame_var}:<< parameters.environment >>"
+              container_name="${circle_project_reponame_var}-container"
               cd /home/source/<< parameters.environment >>/$circle_project_reponame_var/
-              # Force-remove any prior container (stop+rm alone can leave a name conflict)
-              docker rm -f "${circle_project_reponame_var}-container" 2>/dev/null || true
-              docker ps -aq --filter "name=^/${circle_project_reponame_var}-container$" | xargs -r docker rm -f 2>/dev/null || true
-              docker run -d -p 8000:8000 --name "${circle_project_reponame_var}-container" "${circle_project_reponame_var}:<< parameters.environment >>"
+
+              # Rebuild if missing so `docker run` never tries Docker Hub pull of "hrms-py"
+              if ! docker image inspect "$image_tag" >/dev/null 2>&1; then
+                echo "Image $image_tag missing — building on VPS..."
+                docker build -t "$image_tag" -f Dockerfile .
+              fi
+              docker image inspect "$image_tag" >/dev/null
+
+              docker rm -f "$container_name" 2>/dev/null || true
+              docker ps -aq --filter "name=^/${container_name}$" | xargs -r docker rm -f 2>/dev/null || true
+              docker run -d -p 8000:8000 --name "$container_name" --restart always "$image_tag"
+              sleep 2
+              curl -fsS "http://127.0.0.1:8000/health" || curl -fsS "http://127.0.0.1:8000/" || true
             EOF
 
   update-nginx:
