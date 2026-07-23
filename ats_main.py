@@ -308,11 +308,32 @@ db_lock = threading.Lock()
 
 # Text and image extraction (PDF, Image, DOCX)
 
+def _get_face_cascade():
+    """Best-effort Haar cascade. Broken/partial OpenCV must never fail resume parse."""
+    try:
+        cascade_cls = getattr(cv2, "CascadeClassifier", None)
+        if cascade_cls is None:
+            return None
+        data = getattr(cv2, "data", None)
+        haarcascades = getattr(data, "haarcascades", None) if data is not None else None
+        if not haarcascades:
+            return None
+        cascade = cascade_cls(haarcascades + "haarcascade_frontalface_default.xml")
+        # Empty cascade path yields an unusable classifier in some builds.
+        if cascade is None or cascade.empty():
+            return None
+        return cascade
+    except Exception:
+        return None
+
+
 def extract_profile_picture_pdf(doc, filename: str) -> str:
     pic_folder = os.path.join("archive", "profile_pics")
     os.makedirs(pic_folder, exist_ok=True)
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
     try:
+        face_cascade = _get_face_cascade()
+        if face_cascade is None:
+            return "No Photo"
         for i in range(len(doc)):
             for img in doc[i].get_images(full=True):
                 xref = img[0]
@@ -341,8 +362,10 @@ def extract_profile_picture_pdf(doc, filename: str) -> str:
 def extract_face_from_image(file_path: str, filename: str) -> str:
     pic_folder = os.path.join("archive", "profile_pics")
     os.makedirs(pic_folder, exist_ok=True)
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
     try:
+        face_cascade = _get_face_cascade()
+        if face_cascade is None:
+            return "No Photo"
         img_cv = cv2.imread(file_path)
         if img_cv is not None:
             gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
@@ -1083,7 +1106,12 @@ def generate_candidate_fingerprint(name: str, email: str, phone: str) -> str:
 
 # Main resume processor
 
-def process_single_resume(file_path: str, filename: str, expected_skills: list = None) -> dict:
+def process_single_resume(
+    file_path: str,
+    filename: str,
+    expected_skills: list = None,
+    skip_profile_pic: bool = False,
+) -> dict:
     global global_nlp
     try:
         if os.path.getsize(file_path) == 0:
@@ -1115,16 +1143,16 @@ def process_single_resume(file_path: str, filename: str, expected_skills: list =
         grad_year = extract_graduation_year(raw_text)
         work_history = extract_work_history(raw_text)
 
-        # Profile picture
-        file_ext = file_path.lower().split('.')[-1]
-        if file_ext == 'pdf':
-            doc = fitz.open(file_path)
-            profile_pic_path = extract_profile_picture_pdf(doc, filename)
-            doc.close()
-        elif file_ext in ['jpg', 'jpeg', 'png']:
-            profile_pic_path = extract_face_from_image(file_path, filename)
-        else:
-            profile_pic_path = "No Photo"
+        # Profile picture (optional — skipped for Hono API path; never blocks parse)
+        profile_pic_path = "No Photo"
+        if not skip_profile_pic:
+            file_ext = file_path.lower().split('.')[-1]
+            if file_ext == 'pdf':
+                doc = fitz.open(file_path)
+                profile_pic_path = extract_profile_picture_pdf(doc, filename)
+                doc.close()
+            elif file_ext in ['jpg', 'jpeg', 'png']:
+                profile_pic_path = extract_face_from_image(file_path, filename)
 
         # Name extraction strategy
         if not visual_name or len(visual_name.strip()) < 3:
@@ -1412,7 +1440,8 @@ def parse_resume_for_api(
     Returns { status, filename, error?, extracted?, match_score?, raw_text?, candidate? }.
     """
     expected_skills = expected_skills or []
-    result = process_single_resume(file_path, filename, expected_skills)
+    # Skip OpenCV face crop for API ingest — faster and avoids broken cv2 builds failing parse.
+    result = process_single_resume(file_path, filename, expected_skills, skip_profile_pic=True)
     if result.get("status") != "success":
         return {
             "status": "failed",
