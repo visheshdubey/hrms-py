@@ -2,3 +2,10 @@ venv/
 env/
 __pycache__/
 .env
+resumes_to_process/
+archive/
+candidates_data.json
+ats_system.log
+vishesh_report.csv
+*.pyc
+.DS_Store

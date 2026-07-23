@@ -23,7 +23,7 @@ commands:
       - run:
           name: Clean remote disk
           command: |
-            ssh -o StrictHostKeyChecking=no root@147.93.18.45 "docker system prune -af --volumes || true; journalctl --vacuum-time=1d || true; rm -rf /home/source/prod/hrms-py/archive/processed/* || true"
+            ssh -o StrictHostKeyChecking=no root@147.93.18.45 "docker image prune -af || true; docker container prune -f || true; journalctl --vacuum-time=1d || true; rm -rf /home/source/prod/hrms-py/archive/processed/* || true"
 
   create-remote-dir:
     description: "Create remote directory on server"

@@ -1166,6 +1166,7 @@ def process_single_resume(file_path: str, filename: str, expected_skills: list =
                 "grad_year": grad_year,
                 "work_history": work_history,
                 "fingerprint": fingerprint,
+                "raw_text": raw_text,
                 "status": "Processed"
             }
         }
@@ -1308,6 +1309,160 @@ def run_ats_pipeline(expected_skills=None, job_id=None, job_description=None):
         json.dump(extracted_candidates_data, json_file, indent=4)
 
     print(f"Pipeline finished. {len(extracted_candidates_data)} candidates processed.")
+
+
+def extract_jd_skills(job_description: str | None) -> set:
+    jd_skills = set()
+    if not job_description:
+        return jd_skills
+    clean_jd = re.sub(r'<[^>]+>', ' ', job_description).lower()
+    for k_skill in KNOWN_SKILLS:
+        if re.search(r'\b' + re.escape(k_skill) + r'\b', clean_jd):
+            jd_skills.add(k_skill)
+    return jd_skills
+
+
+def candidate_to_extracted(candidate: dict, raw_text: str = "") -> dict:
+    """Normalize pipeline candidate dict to Hono ExtractedResumeData (camelCase)."""
+    email = candidate.get("email") or ""
+    if email in ("Not Found", "not found"):
+        email = ""
+    phone = candidate.get("phone") or ""
+    if phone in ("Not Found", "not found"):
+        phone = ""
+    experience = candidate.get("experience") or ""
+    if isinstance(experience, list):
+        experience = experience[0] if experience else "Fresher"
+    skills = candidate.get("skills") or []
+    if isinstance(skills, str):
+        try:
+            skills = json.loads(skills) if skills else []
+        except Exception:
+            skills = []
+    certifications = candidate.get("certifications") or []
+    languages = candidate.get("languages") or []
+    work_history = candidate.get("work_history") or []
+    normalized_wh = []
+    for entry in work_history:
+        if not isinstance(entry, dict):
+            continue
+        normalized_wh.append({
+            "title": str(entry.get("title") or ""),
+            "company": str(entry.get("company") or ""),
+            "duration": str(entry.get("duration") or ""),
+        })
+
+    text = raw_text or candidate.get("raw_text") or ""
+    missing = []
+    for field, value in (
+        ("name", candidate.get("name")),
+        ("email", email),
+        ("phone", phone),
+        ("skills", skills),
+    ):
+        if not value:
+            missing.append(field)
+
+    match_score = int(candidate.get("match_score") or 0)
+    profile_score = match_score if match_score > 0 else max(0, 100 - len(missing) * 15)
+
+    links = []
+    for key in ("linkedin", "github", "portfolio"):
+        if candidate.get(key):
+            links.append(str(candidate[key]))
+
+    return {
+        "name": str(candidate.get("name") or ""),
+        "email": email,
+        "emails": [email] if email else [],
+        "phone": phone,
+        "phones": [phone] if phone else [],
+        "location": str(candidate.get("location") or ""),
+        "education": str(candidate.get("education") or ""),
+        "experience": str(experience or ""),
+        "skills": [str(s) for s in skills],
+        "linkedin": str(candidate.get("linkedin") or ""),
+        "github": str(candidate.get("github") or ""),
+        "portfolio": str(candidate.get("portfolio") or ""),
+        "summary": str(candidate.get("summary") or ""),
+        "university": str(candidate.get("university") or ""),
+        "gradYear": str(candidate.get("grad_year") or candidate.get("gradYear") or ""),
+        "certifications": [str(c) for c in certifications if c],
+        "languages": [str(l) for l in languages if l],
+        "workHistory": normalized_wh,
+        "links": links,
+        "fingerprint": str(candidate.get("fingerprint") or ""),
+        "missingFields": missing,
+        "warnings": [],
+        "ocrRecommended": len(text.replace(" ", "")) < 300 or len(missing) >= 5,
+        "profileScore": profile_score,
+        "textLength": len(text),
+    }
+
+
+def parse_resume_for_api(
+    file_path: str,
+    filename: str,
+    expected_skills: list | None = None,
+    job_id=None,
+    job_description: str | None = None,
+) -> dict:
+    """
+    Process a single resume in isolation for Hono (no shared candidates_data.json write).
+    Returns { status, filename, error?, extracted?, match_score?, raw_text?, candidate? }.
+    """
+    expected_skills = expected_skills or []
+    result = process_single_resume(file_path, filename, expected_skills)
+    if result.get("status") != "success":
+        return {
+            "status": "failed",
+            "filename": filename,
+            "error": result.get("error") or "Parse failed",
+        }
+
+    candidate = dict(result["data"])
+    raw_text = candidate.pop("raw_text", "") or ""
+    candidate["filename"] = filename
+    if job_id is not None:
+        candidate["job_id"] = job_id
+
+    jd_skills = extract_jd_skills(job_description)
+    match_score = calculate_multi_factor_score(candidate, expected_skills, jd_skills)
+    candidate["match_score"] = match_score
+    extracted = candidate_to_extracted(candidate, raw_text)
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "extracted": extracted,
+        "match_score": match_score,
+        "raw_text": raw_text,
+        "candidate": candidate,
+        "algorithm_version": "hrms-py",
+    }
+
+
+def score_candidate_for_api(
+    candidate_data: dict,
+    expected_skills: list | None = None,
+    job_description: str | None = None,
+) -> dict:
+    expected_skills = expected_skills or []
+    jd_skills = extract_jd_skills(job_description)
+    match_score = calculate_multi_factor_score(candidate_data, expected_skills, jd_skills)
+    return {
+        "match_score": match_score,
+        "algorithm_version": "hrms-py",
+        "components": {
+            "skillsWeight": 0.5,
+            "experienceWeight": 0.2,
+            "educationWeight": 0.15,
+            "certificationsWeight": 0.15,
+        },
+        "matchedRequirements": [],
+        "missingRequirements": [],
+        "warnings": [],
+    }
 
 
 if __name__ == "__main__":
